@@ -2,9 +2,12 @@
 Hand detection + gesture recognition using MediaPipe HandLandmarker.
 Draws hand skeletons on cv2 frames directly.
 """
+import logging
 import os
 import threading
 import cv2
+
+logger = logging.getLogger(__name__)
 
 _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _model_path = os.path.join(_base_dir, "data", "hand_landmarker.task")
@@ -27,7 +30,7 @@ def _get_landmarker():
             os.makedirs(os.path.dirname(_model_path), exist_ok=True)
             url = ("https://storage.googleapis.com/mediapipe-models/"
                    "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task")
-            print("Downloading hand_landmarker.task...")
+            logger.info("Downloading hand_landmarker.task...")
             urllib.request.urlretrieve(url, _model_path)
 
         base_options = mp_python.BaseOptions(model_asset_path=_model_path)
@@ -224,6 +227,15 @@ def draw_hands(frame_bgr, hands):
 def detect_and_draw(frame_bgr):
     """All-in-one: detect hands + draw on frame. Returns list of hand dicts."""
     hands = detect_hands(frame_bgr)
+    for hand in hands:
+        gesture = hand.get("gesture")
+        if gesture:
+            logger.debug(
+                "Gesture recognized: %s hand=%s confidence=%.0f%%",
+                gesture,
+                hand["handedness"],
+                hand["confidence"] * 100,
+            )
     draw_hands(frame_bgr, hands)
     return hands
 

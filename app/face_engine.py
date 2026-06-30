@@ -102,6 +102,65 @@ def haar_detect(frame, scale=1.1, min_neighbors=5, min_size=(60, 60)):
     return results
 
 
+def compute_face_quality(frame, bbox):
+    """Compute a face quality score from 0 to 100.
+
+    Evaluates four criteria:
+      1. Face size relative to frame (larger faces are better, >15% = good)
+      2. Brightness (not too dark or too bright)
+      3. Blur detection via Laplacian variance
+      4. Frontal angle estimation via horizontal symmetry
+    """
+    x1, y1, x2, y2 = bbox
+    h, w = frame.shape[:2]
+
+    # --- Size score (0-25) ---
+    face_area = (x2 - x1) * (y2 - y1)
+    frame_area = w * h
+    size_ratio = face_area / frame_area if frame_area > 0 else 0
+    # 0% -> 0, 15%+ -> 25
+    size_score = min(25.0, (size_ratio / 0.15) * 25.0)
+
+    # --- Brightness score (0-25) ---
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return 0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    mean_brightness = float(np.mean(gray))
+    # Ideal brightness around 100-170; penalize extremes
+    if 80 <= mean_brightness <= 190:
+        brightness_score = 25.0
+    elif mean_brightness < 80:
+        brightness_score = max(0.0, (mean_brightness / 80.0) * 25.0)
+    else:
+        brightness_score = max(0.0, ((255.0 - mean_brightness) / (255.0 - 190.0)) * 25.0)
+
+    # --- Blur score via Laplacian variance (0-25) ---
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    variance = float(laplacian.var())
+    # Sharp images typically have variance > 50; very blurry < 10
+    blur_score = min(25.0, (variance / 50.0) * 25.0)
+
+    # --- Frontal angle / symmetry score (0-25) ---
+    # Compare left and right halves of face crop for symmetry
+    mid = gray.shape[1] // 2
+    if mid > 0:
+        left = gray[:, :mid].astype(np.float32)
+        right = np.flip(gray[:, mid:mid + left.shape[1]], axis=1).astype(np.float32)
+        min_w = min(left.shape[1], right.shape[1])
+        if min_w > 0:
+            diff = np.abs(left[:, :min_w] - right[:, :min_w])
+            symmetry = 1.0 - min(1.0, float(np.mean(diff)) / 80.0)
+            symmetry_score = symmetry * 25.0
+        else:
+            symmetry_score = 0.0
+    else:
+        symmetry_score = 0.0
+
+    total = size_score + brightness_score + blur_score + symmetry_score
+    return max(0, min(100, round(total)))
+
+
 def identify_faces(frame, face_boxes):
     """Run InsightFace identification on face crops. Returns list of (name, distance) or None."""
     _init_insightface()
@@ -176,6 +235,11 @@ def _match_known_faces(face_result):
 
     if dist < FACE_MATCH_THRESHOLD:
         person_id = _known_person_ids[best_idx] if best_idx < len(_known_person_ids) else None
+        logger.info(
+            "Face identified: person=%s confidence=%.1f%%",
+            _known_names[best_idx],
+            (1.0 - dist) * 100,
+        )
         return (_known_names[best_idx], dist, person_id)
     return ("Unknown", dist, None)
 
@@ -203,12 +267,14 @@ def recognize_from_frame(frame):
     id_results = identify_faces(frame, face_boxes)
     results = []
     for (x1, y1, x2, y2), face_id in zip(face_boxes, id_results):
+        quality = compute_face_quality(frame, (x1, y1, x2, y2))
         if face_id is None:
             results.append({
                 "bbox": [x1, y1, x2, y2],
                 "name": "Unknown",
                 "confidence": 0.0,
                 "person_id": None,
+                "quality": quality,
             })
         else:
             results.append({
@@ -216,6 +282,7 @@ def recognize_from_frame(frame):
                 "name": face_id["name"],
                 "confidence": 1.0 - face_id["distance"],
                 "person_id": face_id.get("person_id"),
+                "quality": quality,
             })
     return results
 

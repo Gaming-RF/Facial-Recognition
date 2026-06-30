@@ -1,6 +1,7 @@
 """
 Application routes — face recognition web interface.
 """
+import logging
 import os
 import uuid
 import time
@@ -15,7 +16,31 @@ from app.face_engine import (
 from app.hand_engine import detect_and_draw
 import config
 
+logger = logging.getLogger(__name__)
+
 bp = Blueprint("main", __name__)
+
+
+@bp.before_request
+def _log_request_start():
+    """Record request start time."""
+    request._start_time = time.monotonic()
+
+
+@bp.after_request
+def _log_request(response):
+    """Log every API request with method, path, and status code."""
+    elapsed = 0.0
+    if hasattr(request, "_start_time"):
+        elapsed = (time.monotonic() - request._start_time) * 1000
+    logger.info(
+        "%s %s %s %.1fms",
+        request.method,
+        request.path,
+        response.status_code,
+        elapsed,
+    )
+    return response
 
 # Live tracker singleton
 _tracker = LiveTracker()
