@@ -321,6 +321,44 @@ def _extract_encoding(frame, bbox):
     return None
 
 
+# ─── Data export / import ──────────────────────────────────────────
+
+@bp.route("/api/export/persons", methods=["GET"])
+@limiter.limit("30/minute")
+def export_persons():
+    """Export all persons + their attributes as JSON."""
+    persons = storage.export_all_persons()
+    return jsonify({"persons": persons, "count": len(persons)})
+
+
+@bp.route("/api/export/encodings", methods=["GET"])
+@limiter.limit("30/minute")
+def export_encodings():
+    """Export all encodings (base64 blobs) + person info as JSON."""
+    encodings = storage.export_all_encodings()
+    return jsonify({"encodings": encodings, "count": len(encodings)})
+
+
+@bp.route("/api/import/persons", methods=["POST"])
+@limiter.limit("10/minute")
+def import_persons():
+    """Import persons from JSON (deduplicates by name).
+
+    Expects JSON: { "persons": [ { "name": "...", "attributes": {} }, ... ] }
+    """
+    data = request.get_json(force=True)
+    persons_data = data.get("persons", [])
+    if not persons_data:
+        return jsonify({"error": "No persons data provided"}), 400
+
+    imported, skipped = storage.import_persons(persons_data)
+    return jsonify({
+        "status": "ok",
+        "imported": imported,
+        "skipped_duplicates": skipped,
+    })
+
+
 # ─── Live SSE (for tracking data, not video) ──────────────────────
 
 @bp.route("/api/live-stream")

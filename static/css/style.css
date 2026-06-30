@@ -318,6 +318,12 @@ main {
     font-size: 0.85rem;
 }
 
+.data-io {
+    display: flex;
+    gap: 6px;
+    margin-top: 12px;
+}
+
 /* ── Modals ──────────────────────────────────────── */
 
 .modal {

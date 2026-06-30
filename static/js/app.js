@@ -445,4 +445,85 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     cancelAttrBtn.addEventListener("click", () => attrModal.classList.add("hidden"));
+
+    // ── Data export / import ──────────────────────────────────
+    const exportDataBtn = document.getElementById("export-data-btn");
+    const importDataBtn = document.getElementById("import-data-btn");
+    const importFileInput = document.getElementById("import-file-input");
+
+    exportDataBtn.addEventListener("click", async () => {
+        try {
+            // Fetch both persons and encodings for a full export
+            const [personsRes, encodingsRes] = await Promise.all([
+                fetch("/api/export/persons"),
+                fetch("/api/export/encodings"),
+            ]);
+            const personsData = await personsRes.json();
+            const encodingsData = await encodingsRes.json();
+
+            const exportPayload = {
+                export_version: 1,
+                exported_at: new Date().toISOString(),
+                persons: personsData.persons || [],
+                encodings: encodingsData.encodings || [],
+            };
+
+            const blob = new Blob(
+                [JSON.stringify(exportPayload, null, 2)],
+                { type: "application/json" }
+            );
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `face-data-export-${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            alert("Export failed: " + err.message);
+        }
+    });
+
+    importDataBtn.addEventListener("click", () => {
+        importFileInput.click();
+    });
+
+    importFileInput.addEventListener("change", async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+
+            if (!data.persons || !Array.isArray(data.persons)) {
+                alert("Invalid import file: missing 'persons' array.");
+                return;
+            }
+
+            const res = await fetch("/api/import/persons", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ persons: data.persons }),
+            });
+            const result = await res.json();
+
+            if (result.error) {
+                alert("Import error: " + result.error);
+            } else {
+                const skipped = result.skipped_duplicates || [];
+                let msg = `Imported ${result.imported} person(s).`;
+                if (skipped.length > 0) {
+                    msg += ` Skipped duplicates: ${skipped.join(", ")}`;
+                }
+                alert(msg);
+                loadPersons();
+                loadEncodings();
+            }
+        } catch (err) {
+            alert("Import failed: " + err.message);
+        } finally {
+            importFileInput.value = "";
+        }
+    });
 });

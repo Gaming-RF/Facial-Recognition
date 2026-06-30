@@ -215,3 +215,83 @@ def person_count():
     count = conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0]
     conn.close()
     return count
+
+
+def export_all_persons():
+    """Export all persons with their attributes."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, name, created_at, mugshot_path, attributes FROM persons ORDER BY id"
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["attributes"] = json.loads(d.get("attributes") or "{}")
+        result.append(d)
+    return result
+
+
+def export_all_encodings():
+    """Export all encodings as base64 blobs with person info."""
+    import base64
+
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT e.id, e.person_id, e.encoding, e.created_at,
+               p.name as person_name
+        FROM encodings e JOIN persons p ON e.person_id = p.id
+        ORDER BY e.id
+    """).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        encoding_list = json.loads(r["encoding"])
+        # Convert list of floats back to bytes for compact base64 export
+        import array
+        enc_array = array.array("f", encoding_list)
+        enc_blob = enc_array.tobytes()
+        result.append({
+            "encoding_id": r["id"],
+            "person_id": r["person_id"],
+            "person_name": r["person_name"],
+            "encoding_b64": base64.b64encode(enc_blob).decode("ascii"),
+            "created_at": r["created_at"],
+        })
+    return result
+
+
+def import_persons(persons_data):
+    """Import persons from a list of dicts. Deduplicates by name.
+
+    Returns (imported_count, skipped_names).
+    """
+    global _encoding_cache
+    imported = 0
+    skipped = []
+    conn = get_db()
+    try:
+        for p in persons_data:
+            name = p.get("name", "").strip()
+            if not name:
+                continue
+            # Check for duplicate by name
+            existing = conn.execute(
+                "SELECT id FROM persons WHERE name = ?", (name,)
+            ).fetchone()
+            if existing:
+                skipped.append(name)
+                continue
+            now = time.time()
+            attrs = json.dumps(p.get("attributes", {}))
+            mugshot = p.get("mugshot_path")
+            conn.execute(
+                "INSERT INTO persons (name, created_at, mugshot_path, attributes) VALUES (?, ?, ?, ?)",
+                (name, p.get("created_at", now), mugshot, attrs),
+            )
+            imported += 1
+        conn.commit()
+        _encoding_cache = None
+    finally:
+        conn.close()
+    return imported, skipped
