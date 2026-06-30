@@ -111,7 +111,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const label = document.createElement("span");
             label.className = "face-label";
-            label.textContent = `${face.name} (${Math.round(face.confidence * 100)}%)`;
+            const quality = face.quality !== undefined ? ` Q:${face.quality}` : "";
+            label.textContent = `${face.name} (${Math.round(face.confidence * 100)}%)${quality}`;
             box.appendChild(label);
 
             const assignBtn = document.createElement("button");

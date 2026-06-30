@@ -435,6 +435,12 @@ class LiveTracker:
         # Match to tracks
         self._match_tracks(face_boxes)
 
+        # Compute quality for each detected face and store in track
+        for fi, bbox in enumerate(face_boxes):
+            for tid, trk in self._tracks.items():
+                if trk["face_id"] == fi:
+                    trk["quality"] = compute_face_quality(frame, bbox)
+
         # Background identification
         self._background_identify(frame, face_boxes)
 
@@ -460,13 +466,16 @@ class LiveTracker:
             # Draw box
             cv2.rectangle(frame, (sx, sy), (ex, ey), color, 2)
 
-            # Build label with confidence and threshold info
+            # Build label with quality, confidence, and threshold info
             name = trk["name"] or "..."
             distance = trk.get("distance", 1.0)
             confidence = max(0.0, 1.0 - distance)
             confidence_pct = round(confidence * 100, 1)
+            quality = trk.get("quality", 0)
 
-            if name == "Unknown" or confidence < FACE_MATCH_THRESHOLD:
+            if quality < 50:
+                label = f"Low Quality ({quality})"
+            elif name == "Unknown" or confidence < FACE_MATCH_THRESHOLD:
                 label = f"Uncertain ({confidence_pct}%) thr:{FACE_MATCH_THRESHOLD}"
             else:
                 label = f"{name} ({confidence_pct}%) thr:{FACE_MATCH_THRESHOLD}"
@@ -477,10 +486,10 @@ class LiveTracker:
             cv2.putText(frame, label, (sx + 3, sy - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
-            # Size info
+            # Size + quality info
             fw = ex - sx
             fh = ey - sy
-            info = f"{fw}x{fh}"
+            info = f"{fw}x{fh} Q:{quality}"
             cv2.putText(frame, info, (sx, ey + 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
