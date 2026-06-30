@@ -4,6 +4,15 @@ import os
 import sys
 
 from flask import Flask
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+# Shared limiter instance — init_app'd in create_app()
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri="memory://",
+    default_limits=[],
+)
 
 
 def create_app():
@@ -29,6 +38,8 @@ def create_app():
     from app import storage
 
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
+    limiter.init_app(app)
+
     storage.init_db()
 
     from app.routes import bp

@@ -43,6 +43,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentPhotoId = null;
     let currentFaces = [];
+    let selectedFaces = new Set();
 
     dropZone.addEventListener("click", () => photoInput.click());
 
@@ -104,10 +105,26 @@ document.addEventListener("DOMContentLoaded", () => {
             const [x1, y1, x2, y2] = face.bbox;
             const box = document.createElement("div");
             box.className = "face-box";
+            if (selectedFaces.has(i)) {
+                box.classList.add("selected");
+            }
             box.style.left = x1 * scaleX + "px";
             box.style.top = y1 * scaleY + "px";
             box.style.width = (x2 - x1) * scaleX + "px";
             box.style.height = (y2 - y1) * scaleY + "px";
+
+            // Click to toggle selection
+            box.addEventListener("click", (e) => {
+                if (e.target.classList.contains("face-assign-btn")) return;
+                if (selectedFaces.has(i)) {
+                    selectedFaces.delete(i);
+                    box.classList.remove("selected");
+                } else {
+                    selectedFaces.add(i);
+                    box.classList.add("selected");
+                }
+                updateAssignSelectedBtn();
+            });
 
             const label = document.createElement("span");
             label.className = "face-label";
@@ -126,6 +143,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
             photoBoxes.appendChild(box);
         });
+        updateAssignSelectedBtn();
+    }
+
+    function updateAssignSelectedBtn() {
+        const btn = document.getElementById("assign-selected-btn");
+        if (selectedFaces.size > 0) {
+            btn.classList.remove("hidden");
+            btn.textContent = `Assign Selected (${selectedFaces.size})`;
+        } else {
+            btn.classList.add("hidden");
+        }
     }
 
     detectBtn.addEventListener("click", () => {
@@ -142,8 +170,10 @@ document.addEventListener("DOMContentLoaded", () => {
         dropZone.querySelector(".upload-prompt").classList.remove("hidden");
         detectBtn.disabled = true;
         clearBtn.classList.add("hidden");
+        document.getElementById("assign-selected-btn").classList.add("hidden");
         currentPhotoId = null;
         currentFaces = [];
+        selectedFaces.clear();
         photoInput.value = "";
     });
 
@@ -153,9 +183,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const cancelAssign = document.getElementById("cancel-assign");
 
     let assigningFaceIndex = null;
+    let assigningBatchIndices = null;
 
     function openAssignModal(faceIndex) {
         assigningFaceIndex = faceIndex;
+        assigningBatchIndices = null;
         loadPersons().then((persons) => {
             assignList.innerHTML = "";
             if (persons.length === 0) {
@@ -166,6 +198,25 @@ document.addEventListener("DOMContentLoaded", () => {
                 row.className = "person-row";
                 row.textContent = p.name;
                 row.onclick = () => assignFace(p.id, p.name);
+                assignList.appendChild(row);
+            });
+            assignModal.classList.remove("hidden");
+        });
+    }
+
+    function openBatchAssignModal(indices) {
+        assigningFaceIndex = null;
+        assigningBatchIndices = indices;
+        loadPersons().then((persons) => {
+            assignList.innerHTML = "";
+            if (persons.length === 0) {
+                assignList.innerHTML = '<p class="empty">No people registered yet. Add one in Manage mode.</p>';
+            }
+            persons.forEach((p) => {
+                const row = document.createElement("div");
+                row.className = "person-row";
+                row.textContent = `${p.name} (${p.encoding_count || 0} enc)`;
+                row.onclick = () => batchAssignFaces(p.id, p.name);
                 assignList.appendChild(row);
             });
             assignModal.classList.remove("hidden");
@@ -199,6 +250,47 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             });
     }
+
+    function batchAssignFaces(personId, personName) {
+        if (!currentPhotoId || !assigningBatchIndices || assigningBatchIndices.length === 0) return;
+        const indices = [...assigningBatchIndices];
+        fetch("/api/batch-assign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                photo_id: currentPhotoId,
+                face_indices: indices,
+                person_id: personId,
+            }),
+        })
+            .then((r) => r.json())
+            .then((data) => {
+                if (data.status === "ok") {
+                    indices.forEach((idx) => {
+                        if (currentFaces[idx]) {
+                            currentFaces[idx].name = personName;
+                            currentFaces[idx].confidence = 1.0;
+                        }
+                    });
+                    selectedFaces.clear();
+                    drawPhotoBoxes(currentFaces);
+                    assignModal.classList.add("hidden");
+                    let msg = `Assigned ${data.added} face(s) to ${personName}`;
+                    if (data.errors && data.errors.length > 0) {
+                        msg += ` (${data.errors.length} errors)`;
+                    }
+                    photoResults.innerHTML = `<div class="success">${msg}</div>`;
+                } else {
+                    photoResults.innerHTML = `<div class="error">${data.error}</div>`;
+                }
+            });
+    }
+
+    document.getElementById("assign-selected-btn").addEventListener("click", () => {
+        if (selectedFaces.size > 0) {
+            openBatchAssignModal([...selectedFaces]);
+        }
+    });
 
     // ── Manage persons ──────────────────────────────────────
     const personCards = document.getElementById("person-cards");

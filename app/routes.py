@@ -10,6 +10,7 @@ from flask import (
 )
 import cv2
 from app import storage
+from app import limiter
 from app.face_engine import (
     recognize_from_frame, LiveTracker, load_known_faces  # noqa: F401
 )
@@ -41,6 +42,16 @@ def _log_request(response):
         elapsed,
     )
     return response
+
+
+@bp.errorhandler(429)
+def ratelimit_handler(e):
+    """Return proper JSON response for rate-limited requests."""
+    return jsonify({
+        "error": "Rate limit exceeded",
+        "message": str(e.description),
+    }), 429
+
 
 # Live tracker singleton
 _tracker = LiveTracker()
@@ -128,6 +139,7 @@ def camera_feed():
 # ─── Person management ─────────────────────────────────────────────
 
 @bp.route("/api/persons", methods=["GET"])
+@limiter.limit("30/minute")
 def get_persons():
     persons = storage.get_all_persons()
     for p in persons:
@@ -136,6 +148,7 @@ def get_persons():
 
 
 @bp.route("/api/persons", methods=["POST"])
+@limiter.limit("30/minute")
 def create_person():
     data = request.get_json(force=True)
     name = data.get("name", "").strip()
@@ -146,12 +159,14 @@ def create_person():
 
 
 @bp.route("/api/persons/<int:person_id>", methods=["DELETE"])
+@limiter.limit("30/minute")
 def delete_person(person_id):
     storage.delete_person(person_id)
     return jsonify({"status": "deleted"})
 
 
 @bp.route("/api/persons/<int:person_id>/attributes", methods=["GET"])
+@limiter.limit("30/minute")
 def get_attributes(person_id):
     person = storage.get_person_by_id(person_id)
     if not person:
@@ -163,6 +178,7 @@ def get_attributes(person_id):
 
 
 @bp.route("/api/persons/<int:person_id>/attributes", methods=["POST"])
+@limiter.limit("30/minute")
 def update_attributes(person_id):
     person = storage.get_person_by_id(person_id)
     if not person:
@@ -176,6 +192,7 @@ def update_attributes(person_id):
 # ─── Photo upload ──────────────────────────────────────────────────
 
 @bp.route("/api/upload", methods=["POST"])
+@limiter.limit("10/minute")
 def upload_photo():
     if "photo" not in request.files:
         return jsonify({"error": "No photo"}), 400
@@ -237,6 +254,55 @@ def add_encoding():
 def delete_encoding(enc_id):
     storage.delete_encoding(enc_id)
     return jsonify({"status": "deleted"})
+
+
+@bp.route("/api/batch-assign", methods=["POST"])
+@limiter.limit("30/minute")
+def batch_assign():
+    """Assign multiple faces from a photo to one person at once.
+
+    Expects JSON: {photo_id, face_indices: [0, 1, 2], person_id}
+    """
+    data = request.get_json(force=True)
+    photo_id = data.get("photo_id")
+    face_indices = data.get("face_indices", [])
+    person_id = data.get("person_id")
+
+    if not photo_id or not person_id or not face_indices:
+        return jsonify({"error": "photo_id, face_indices, and person_id required"}), 400
+
+    photo_path = os.path.join(config.DATA_DIR, f"{photo_id}.jpg")
+    if not os.path.exists(photo_path):
+        return jsonify({"error": "Photo not found"}), 404
+
+    person = storage.get_person_by_id(person_id)
+    if not person:
+        return jsonify({"error": "Person not found"}), 404
+
+    frame = cv2.imread(photo_path)
+    results = recognize_from_frame(frame)
+
+    added = 0
+    errors = []
+    for idx in face_indices:
+        if idx >= len(results):
+            errors.append(f"face_index {idx} out of range")
+            continue
+        encoding = _extract_encoding(frame, results[idx]["bbox"])
+        if encoding is None:
+            errors.append(f"Could not extract encoding for face {idx}")
+            continue
+        storage.add_encoding_to_person(person_id, encoding)
+        added += 1
+
+    load_known_faces()
+    new_count = storage.get_encoding_count(person_id)
+    return jsonify({
+        "status": "ok",
+        "added": added,
+        "errors": errors,
+        "encoding_count": new_count,
+    }), 201
 
 
 def _extract_encoding(frame, bbox):
