@@ -140,6 +140,21 @@ main {
     position: absolute;
     border: 2px solid var(--primary);
     pointer-events: auto;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.face-box.selected {
+    border-color: #4aff4a;
+    box-shadow: 0 0 8px rgba(74, 255, 74, 0.5);
+}
+
+.face-box:hover {
+    border-color: var(--primary-hover);
+}
+
+.face-box.selected:hover {
+    border-color: #6aff6a;
 }
 
 .face-label {
