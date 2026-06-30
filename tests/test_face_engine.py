@@ -81,7 +81,7 @@ def test_match_known_faces_empty():
     class FakeResult:
         normed_embedding = np.random.rand(512)
 
-    name, dist = face_engine._match_known_faces(FakeResult())
+    name, dist, _pid = face_engine._match_known_faces(FakeResult())
     assert name == "Unknown"
     assert dist == 1.0
 
@@ -101,7 +101,7 @@ def test_match_known_faces_below_threshold():
     class FakeResult:
         normed_embedding = -known_emb  # opposite direction = high distance
 
-    name, dist = face_engine._match_known_faces(FakeResult())
+    name, dist, _pid = face_engine._match_known_faces(FakeResult())
     assert name == "Unknown"
     assert dist > 0.5
 
@@ -119,7 +119,7 @@ def test_match_known_faces_above_threshold():
     class FakeResult:
         normed_embedding = emb.copy()
 
-    name, dist = face_engine._match_known_faces(FakeResult())
+    name, dist, _pid = face_engine._match_known_faces(FakeResult())
     assert name == "Alice"
     assert dist < 0.01  # essentially zero distance
 
@@ -134,7 +134,7 @@ def test_match_known_faces_none_embedding():
     class FakeResult:
         normed_embedding = None
 
-    name, dist = face_engine._match_known_faces(FakeResult())
+    name, dist, _pid = face_engine._match_known_faces(FakeResult())
     assert name == "Unknown"
     assert dist == 1.0
 
