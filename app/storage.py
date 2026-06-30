@@ -116,6 +116,7 @@ def get_all_encodings():
 
 
 def add_encoding_to_person(person_id, encoding):
+    """Add a new encoding to a person. Returns the new encoding count."""
     global _encoding_cache
     now = time.time()
     conn = get_db()
@@ -123,9 +124,13 @@ def add_encoding_to_person(person_id, encoding):
         "INSERT INTO encodings (person_id, encoding, created_at) VALUES (?, ?, ?)",
         (person_id, json.dumps(encoding.tolist()), now)
     )
+    count = conn.execute(
+        "SELECT COUNT(*) FROM encodings WHERE person_id = ?", (person_id,)
+    ).fetchone()[0]
     conn.commit()
     conn.close()
     _encoding_cache = None
+    return count
 
 
 def get_encoding_count(person_id):
@@ -171,6 +176,17 @@ def delete_person(person_id):
     conn.commit()
     conn.close()
     _encoding_cache = None
+
+
+def get_encodings_for_person(person_id):
+    """Return all encoding IDs and their creation times for a person."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, created_at FROM encodings WHERE person_id = ? ORDER BY created_at",
+        (person_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def delete_encoding(encoding_id):

@@ -203,7 +203,9 @@ def add_encoding():
         return jsonify({"error": "Person not found"}), 404
 
     storage.add_encoding_to_person(person_id, encoding)
-    return jsonify({"status": "added"}), 201
+    new_count = storage.get_encoding_count(person_id)
+    load_known_faces()
+    return jsonify({"status": "added", "encoding_count": new_count}), 201
 
 
 @bp.route("/api/encodings/<int:enc_id>", methods=["DELETE"])

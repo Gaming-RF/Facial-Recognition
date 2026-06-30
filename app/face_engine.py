@@ -2,12 +2,15 @@
 Face detection (OpenCV DNN), identification (InsightFace), and tracking.
 Everything draws on cv2 frames for smooth MJPEG streaming.
 """
+import logging
 import os
 import time
 import threading
 import pickle
 import numpy as np
 import cv2
+
+logger = logging.getLogger(__name__)
 
 # Optional InsightFace for identification
 _insightface_available = False
@@ -17,7 +20,7 @@ try:
     from insightface.app import FaceAnalysis
     _insightface_available = True
 except ImportError:
-    pass
+    logger.info("InsightFace not available; identification disabled")
 
 # --- OpenCV DNN face detector ---
 _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +54,9 @@ def _init_insightface():
             allowed_modules=["detection", "recognition"],
         )
         _face_app.prepare(ctx_id=0, det_size=FACE_DET_SIZE)
-    except Exception:
+        logger.info("InsightFace initialized (model=%s, det_size=%s)", FACE_MODEL, FACE_DET_SIZE)
+    except Exception as e:
+        logger.warning("InsightFace init failed: %s", e)
         _face_app = None
 
 
@@ -115,7 +120,7 @@ def identify_faces(frame, face_boxes):
             if faces:
                 best, best_dist = None, 1.0
                 for face in faces:
-                    name, dist = _match_known_faces(face)
+                    name, dist, _pid = _match_known_faces(face)
                     if dist < best_dist:
                         best, best_dist = name, dist
                 results.append({"name": best, "distance": best_dist})
@@ -128,11 +133,12 @@ def identify_faces(frame, face_boxes):
 
 _known_encodings = []
 _known_names = []
+_known_person_ids = []
 
 
 def load_known_faces():
     """Load known face encodings from disk."""
-    global _known_encodings, _known_names
+    global _known_encodings, _known_names, _known_person_ids
     data_dir = os.path.join(_base_dir, "data")
     enc_path = os.path.join(data_dir, "encodings.pkl")
     if not os.path.exists(enc_path):
@@ -142,46 +148,57 @@ def load_known_faces():
             data = pickle.load(f)
         _known_encodings = np.array(data["encodings"])
         _known_names = data["names"]
+        _known_person_ids = data.get("person_ids", [None] * len(data["names"]))
     except Exception:
         pass
 
 
 def _match_known_faces(face_result):
-    """Match a detected face against known encodings. Returns (name, distance)."""
+    """Match a detected face against ALL stored encodings.
+
+    Compares against every encoding for every person, returning the best
+    overall match with both name and person_id.
+
+    Returns (name, distance, person_id).
+    """
     from config import FACE_MATCH_THRESHOLD
 
     if not _known_encodings.size:
-        return ("Unknown", 1.0)
+        return ("Unknown", 1.0, None)
 
     emb = face_result.normed_embedding
     if emb is None:
-        return ("Unknown", 1.0)
+        return ("Unknown", 1.0, None)
 
     dists = np.linalg.norm(_known_encodings - emb, axis=1)
     best_idx = np.argmin(dists)
     dist = float(dists[best_idx])
 
     if dist < FACE_MATCH_THRESHOLD:
-        return (_known_names[best_idx], dist)
-    return ("Unknown", dist)
+        person_id = _known_person_ids[best_idx] if best_idx < len(_known_person_ids) else None
+        return (_known_names[best_idx], dist, person_id)
+    return ("Unknown", dist, None)
 
 
 def identify_face_crop(face_crop_bgr):
-    """Identify a single face crop. Returns (name, distance)."""
+    """Identify a single face crop. Returns (name, distance, person_id)."""
     _init_insightface()
     if _face_app is None:
-        return ("Unknown", 1.0)
+        return ("Unknown", 1.0, None)
     try:
         faces = _face_app.get(face_crop_bgr)
         if faces:
             return _match_known_faces(faces[0])
     except Exception:
         pass
-    return ("Unknown", 1.0)
+    return ("Unknown", 1.0, None)
 
 
 def recognize_from_frame(frame):
-    """Detect + identify in one call (for photo upload)."""
+    """Detect + identify in one call (for photo upload).
+
+    Returns list of dicts with bbox, name, confidence, and person_id.
+    """
     face_boxes = dnn_detect(frame)
     id_results = identify_faces(frame, face_boxes)
     results = []
@@ -191,12 +208,14 @@ def recognize_from_frame(frame):
                 "bbox": [x1, y1, x2, y2],
                 "name": "Unknown",
                 "confidence": 0.0,
+                "person_id": None,
             })
         else:
             results.append({
                 "bbox": [x1, y1, x2, y2],
                 "name": face_id["name"],
                 "confidence": 1.0 - face_id["distance"],
+                "person_id": face_id.get("person_id"),
             })
     return results
 
@@ -331,7 +350,7 @@ class LiveTracker:
                     try:
                         faces = _face_app.get(crop)
                         if faces:
-                            name, dist = _match_known_faces(faces[0])
+                            name, dist, _pid = _match_known_faces(faces[0])
                             results[fi] = {"name": name, "distance": dist}
                     except Exception:
                         pass
