@@ -4,7 +4,6 @@ Draws hand skeletons on cv2 frames directly.
 """
 import os
 import threading
-import numpy as np
 import cv2
 
 _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +18,6 @@ def _get_landmarker():
     if _landmarker is not None:
         return _landmarker
     try:
-        import mediapipe as mp
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision
 

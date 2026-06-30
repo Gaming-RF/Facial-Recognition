@@ -238,7 +238,6 @@ class LiveTracker:
     def _match_tracks(self, detected_boxes):
         """Match detected boxes to existing tracks by center distance."""
         new_tracks = {}
-        used_det = set()
         used_trk = set()
 
         # Build detection centers

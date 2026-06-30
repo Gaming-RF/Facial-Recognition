@@ -4,15 +4,13 @@ Application routes — face recognition web interface.
 import os
 import uuid
 import time
-import queue
-import threading
 from flask import (
     Blueprint, Response, jsonify, request, render_template, stream_with_context
 )
 import cv2
 from app import storage
 from app.face_engine import (
-    recognize_from_frame, LiveTracker, load_known_faces
+    recognize_from_frame, LiveTracker, load_known_faces  # noqa: F401
 )
 from app.hand_engine import detect_and_draw
 import config

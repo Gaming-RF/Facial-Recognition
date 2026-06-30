@@ -1,5 +1,5 @@
 from flask import Flask
-import config
+import config as config  # noqa: F401
 from app import storage
 
 

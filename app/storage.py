@@ -1,7 +1,6 @@
 import sqlite3
 import json
 import time
-from pathlib import Path
 import config
 
 _encoding_cache = None
