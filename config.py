@@ -14,6 +14,7 @@ MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
 MIMO_MODEL = "mimo-v2.5"
 
 FACE_MATCH_TOLERANCE = 0.45
+FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.6"))
 FACE_ENCODINGS_PER_PERSON = 5
 FACE_MODEL = os.getenv("FACE_MODEL", "buffalo_s")
 FACE_DET_SIZE = int(os.getenv("FACE_DET_SIZE", "320"))

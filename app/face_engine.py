@@ -148,6 +148,8 @@ def load_known_faces():
 
 def _match_known_faces(face_result):
     """Match a detected face against known encodings. Returns (name, distance)."""
+    from config import FACE_MATCH_THRESHOLD
+
     if not _known_encodings.size:
         return ("Unknown", 1.0)
 
@@ -159,7 +161,7 @@ def _match_known_faces(face_result):
     best_idx = np.argmin(dists)
     dist = float(dists[best_idx])
 
-    if dist < 0.6:
+    if dist < FACE_MATCH_THRESHOLD:
         return (_known_names[best_idx], dist)
     return ("Unknown", dist)
 
@@ -289,6 +291,7 @@ class LiveTracker:
                     "cy": (y1 + y2) // 2,
                     "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                     "name": None,  # pending identification
+                    "distance": 1.0,
                     "age": 0,
                     "color": self._assign_color(),
                     "smooth_x": (x1, x2),
@@ -351,11 +354,14 @@ class LiveTracker:
         self._background_identify(frame, face_boxes)
 
         # Apply identification results
+        from config import FACE_MATCH_THRESHOLD
+
         with self._lock:
             for fi, info in self._id_results.items():
                 for tid, trk in self._tracks.items():
                     if trk["face_id"] == fi and trk["name"] is None:
                         trk["name"] = info["name"]
+                        trk["distance"] = info["distance"]
 
         # Draw faces on frame
         for tid, trk in self._tracks.items():
@@ -369,9 +375,16 @@ class LiveTracker:
             # Draw box
             cv2.rectangle(frame, (sx, sy), (ex, ey), color, 2)
 
-            # Label
+            # Build label with confidence and threshold info
             name = trk["name"] or "..."
-            label = f"{name}"
+            distance = trk.get("distance", 1.0)
+            confidence = max(0.0, 1.0 - distance)
+            confidence_pct = round(confidence * 100, 1)
+
+            if name == "Unknown" or confidence < FACE_MATCH_THRESHOLD:
+                label = f"Uncertain ({confidence_pct}%) thr:{FACE_MATCH_THRESHOLD}"
+            else:
+                label = f"{name} ({confidence_pct}%) thr:{FACE_MATCH_THRESHOLD}"
 
             # Background for text
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
