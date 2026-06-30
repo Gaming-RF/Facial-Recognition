@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition System</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <h1>Face Recognition</h1>
+        <div class="mode-toggle">
+            <button class="mode-btn active" data-mode="live">Live Camera</button>
+            <button class="mode-btn" data-mode="photo">Photo Upload</button>
+            <button class="mode-btn" data-mode="manage">Manage Faces</button>
+        </div>
+    </header>
+
+    <main>
+        <!-- Live Camera Mode -->
+        <section id="live-mode" class="mode-section active">
+            <div class="video-container">
+                <img id="live-stream" src="/api/camera" alt="Live Camera" />
+            </div>
+        </section>
+
+        <!-- Photo Upload Mode -->
+        <section id="photo-mode" class="mode-section">
+            <div class="upload-area" id="drop-zone">
+                <input type="file" id="photo-input" accept="image/*" hidden />
+                <div class="upload-prompt">
+                    <div class="upload-icon">+</div>
+                    <p>Click or drop a photo here</p>
+                </div>
+                <img id="photo-preview" class="hidden" />
+                <div id="photo-boxes" class="boxes-container"></div>
+            </div>
+            <div class="photo-controls">
+                <button id="detect-btn" class="btn" disabled>Detect Faces</button>
+                <button id="clear-photo-btn" class="btn btn-secondary hidden">Clear</button>
+            </div>
+            <div id="photo-results" class="results"></div>
+        </section>
+
+        <!-- Manage Faces Mode -->
+        <section id="manage-mode" class="mode-section">
+            <div class="manage-layout">
+                <div class="person-list">
+                    <h2>Known People</h2>
+                    <div id="person-cards"></div>
+                    <div class="add-person">
+                        <input type="text" id="new-person-name" placeholder="New person name" />
+                        <button id="add-person-btn" class="btn">Add</button>
+                    </div>
+                </div>
+                <div class="encoding-list">
+                    <h2>Encodings</h2>
+                    <div id="encoding-cards"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Assign Face Modal -->
+    <div id="assign-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Assign Face to Person</h3>
+            <div id="assign-person-list"></div>
+            <button class="btn btn-secondary" id="cancel-assign">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Attributes Modal -->
+    <div id="attributes-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Person Attributes</h3>
+            <div id="attributes-editor"></div>
+            <div class="modal-actions">
+                <button class="btn" id="save-attributes">Save</button>
+                <button class="btn btn-secondary" id="cancel-attributes">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,389 @@
+"""
+Face detection (OpenCV DNN), identification (InsightFace), and tracking.
+Everything draws on cv2 frames for smooth MJPEG streaming.
+"""
+import os
+import time
+import threading
+import pickle
+import numpy as np
+import cv2
+
+# Optional InsightFace for identification
+_insightface_available = False
+_face_app = None
+
+try:
+    from insightface.app import FaceAnalysis
+    _insightface_available = True
+except ImportError:
+    pass
+
+# --- OpenCV DNN face detector ---
+_base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_prototxt = os.path.join(_base_dir, "models", "deploy.prototxt")
+_caffemodel = os.path.join(_base_dir, "models", "res10_300x300_ssd_iter_140000.caffemodel")
+
+_dnn_net = None
+if os.path.exists(_prototxt) and os.path.exists(_caffemodel):
+    try:
+        _dnn_net = cv2.dnn.readNetFromCaffe(_prototxt, _caffemodel)
+    except Exception:
+        pass
+
+# Haar cascade fallback
+_haar_cascade = None
+if _dnn_net is None:
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    _haar_cascade = cv2.CascadeClassifier(cascade_path)
+
+
+def _init_insightface():
+    """Initialize InsightFace for identification (called once)."""
+    global _face_app
+    if _face_app is not None or not _insightface_available:
+        return
+    try:
+        from config import FACE_MODEL, FACE_DET_SIZE
+        _face_app = FaceAnalysis(
+            name=FACE_MODEL,
+            providers=["CPUExecutionProvider"],
+            allowed_modules=["detection", "recognition"],
+        )
+        _face_app.prepare(ctx_id=0, det_size=FACE_DET_SIZE)
+    except Exception:
+        _face_app = None
+
+
+def dnn_detect(frame, conf_threshold=0.6):
+    """Detect faces using OpenCV DNN. Returns list of (x1, y1, x2, y2)."""
+    if _dnn_net is None:
+        return haar_detect(frame)
+
+    h, w = frame.shape[:2]
+    blob = cv2.dnn.blobFromImage(
+        cv2.resize(frame, (300, 300)), 1.0, (300, 300),
+        (104.0, 177.0, 123.0),
+    )
+    _dnn_net.setInput(blob)
+    detections = _dnn_net.forward()
+
+    faces = []
+    for i in range(detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+        if confidence > conf_threshold:
+            box = detections[0, 0, i, 3:7] * [w, h, w, h]
+            x1, y1, x2, y2 = box.astype("int")
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w, x2), min(h, y2)
+            if (x2 - x1) > 20 and (y2 - y1) > 20:
+                faces.append((x1, y1, x2, y2))
+    return faces
+
+
+def haar_detect(frame, scale=1.1, min_neighbors=5, min_size=(60, 60)):
+    """Fallback Haar cascade detection."""
+    if _haar_cascade is None:
+        return []
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces_rects = _haar_cascade.detectMultiScale(
+        gray, scaleFactor=scale, minNeighbors=min_neighbors, minSize=min_size
+    )
+    if len(faces_rects) == 0:
+        return []
+    results = []
+    for x, y, fw, fh in faces_rects:
+        results.append((int(x), int(y), int(x + fw), int(y + fh)))
+    return results
+
+
+def identify_faces(frame, face_boxes):
+    """Run InsightFace identification on face crops. Returns list of (name, distance) or None."""
+    _init_insightface()
+    if _face_app is None or not face_boxes:
+        return [None] * len(face_boxes)
+
+    h, w = frame.shape[:2]
+    results = []
+    for x1, y1, x2, y2 in face_boxes:
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            results.append(None)
+            continue
+        try:
+            faces = _face_app.get(crop)
+            if faces:
+                best, best_dist = None, 1.0
+                for face in faces:
+                    name, dist = _match_known_faces(face)
+                    if dist < best_dist:
+                        best, best_dist = name, dist
+                results.append({"name": best, "distance": best_dist})
+            else:
+                results.append(None)
+        except Exception:
+            results.append(None)
+    return results
+
+
+_known_encodings = []
+_known_names = []
+
+
+def load_known_faces():
+    """Load known face encodings from disk."""
+    global _known_encodings, _known_names
+    data_dir = os.path.join(_base_dir, "data")
+    enc_path = os.path.join(data_dir, "encodings.pkl")
+    if not os.path.exists(enc_path):
+        return
+    try:
+        with open(enc_path, "rb") as f:
+            data = pickle.load(f)
+        _known_encodings = np.array(data["encodings"])
+        _known_names = data["names"]
+    except Exception:
+        pass
+
+
+def _match_known_faces(face_result):
+    """Match a detected face against known encodings. Returns (name, distance)."""
+    if not _known_encodings.size:
+        return ("Unknown", 1.0)
+
+    emb = face_result.normed_embedding
+    if emb is None:
+        return ("Unknown", 1.0)
+
+    dists = np.linalg.norm(_known_encodings - emb, axis=1)
+    best_idx = np.argmin(dists)
+    dist = float(dists[best_idx])
+
+    if dist < 0.6:
+        return (_known_names[best_idx], dist)
+    return ("Unknown", dist)
+
+
+def identify_face_crop(face_crop_bgr):
+    """Identify a single face crop. Returns (name, distance)."""
+    _init_insightface()
+    if _face_app is None:
+        return ("Unknown", 1.0)
+    try:
+        faces = _face_app.get(face_crop_bgr)
+        if faces:
+            return _match_known_faces(faces[0])
+    except Exception:
+        pass
+    return ("Unknown", 1.0)
+
+
+def recognize_from_frame(frame):
+    """Detect + identify in one call (for photo upload)."""
+    face_boxes = dnn_detect(frame)
+    id_results = identify_faces(frame, face_boxes)
+    results = []
+    for (x1, y1, x2, y2), face_id in zip(face_boxes, id_results):
+        if face_id is None:
+            results.append({
+                "bbox": [x1, y1, x2, y2],
+                "name": "Unknown",
+                "confidence": 0.0,
+            })
+        else:
+            results.append({
+                "bbox": [x1, y1, x2, y2],
+                "name": face_id["name"],
+                "confidence": 1.0 - face_id["distance"],
+            })
+    return results
+
+
+# ──────────────────────────────────────────────────────────────
+# Live tracker: draws on cv2 frame, runs InsightFace in background
+# ──────────────────────────────────────────────────────────────
+
+# Per-label colors (BGR)
+COLORS = [
+    (0, 255, 0),      # green
+    (255, 100, 100),   # light blue
+    (100, 255, 255),   # yellow
+    (255, 0, 255),     # magenta
+    (0, 255, 255),     # cyan
+    (255, 255, 0),     # teal
+    (128, 0, 255),     # purple
+    (0, 165, 255),     # orange
+]
+
+
+class LiveTracker:
+    """Draws face boxes + names + hands directly on cv2 frames."""
+
+    def __init__(self):
+        self._tracks = {}  # id -> {cx, cy, x1, y1, x2, y2, name, age, color, smooth_x, smooth_y}
+        self._next_id = 0
+        self._lock = threading.Lock()
+        self._insight_running = False
+        self._last_id_time = 0
+        self._id_results = {}  # face_id -> {"name": str, "distance": float}
+
+        # Load known faces
+        load_known_faces()
+
+    def _assign_color(self):
+        return COLORS[self._next_id % len(COLORS)]
+
+    def _match_tracks(self, detected_boxes):
+        """Match detected boxes to existing tracks by center distance."""
+        new_tracks = {}
+        used_det = set()
+        used_trk = set()
+
+        # Build detection centers
+        det_centers = []
+        for x1, y1, x2, y2 in detected_boxes:
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            det_centers.append((cx, cy))
+
+        # Match: for each detection, find closest existing track
+        for di, (dcx, dcy) in enumerate(det_centers):
+            best_tid = None
+            best_dist = 150  # max match distance
+            for tid, trk in self._tracks.items():
+                if tid in used_trk:
+                    continue
+                dist = ((dcx - trk["cx"]) ** 2 + (dcy - trk["cy"]) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_tid = tid
+
+            x1, y1, x2, y2 = detected_boxes[di]
+            if best_tid is not None:
+                # Update existing track
+                trk = self._tracks[best_tid]
+                # Smooth position
+                alpha = 0.4
+                sx = int(alpha * x1 + (1 - alpha) * trk["smooth_x"][0])
+                sy = int(alpha * y1 + (1 - alpha) * trk["smooth_y"][0])
+                ex = int(alpha * x2 + (1 - alpha) * trk["smooth_x"][1])
+                ey = int(alpha * y2 + (1 - alpha) * trk["smooth_y"][1])
+                new_tracks[best_tid] = {
+                    "cx": (x1 + x2) // 2,
+                    "cy": (y1 + y2) // 2,
+                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                    "name": trk["name"],
+                    "age": trk["age"] + 1,
+                    "color": trk["color"],
+                    "smooth_x": (sx, ex),
+                    "smooth_y": (sy, ey),
+                    "face_id": best_tid,
+                }
+                used_trk.add(best_tid)
+            else:
+                # New track
+                tid = self._next_id
+                self._next_id += 1
+                new_tracks[tid] = {
+                    "cx": (x1 + x2) // 2,
+                    "cy": (y1 + y2) // 2,
+                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                    "name": None,  # pending identification
+                    "age": 0,
+                    "color": self._assign_color(),
+                    "smooth_x": (x1, x2),
+                    "smooth_y": (y1, y2),
+                    "face_id": tid,
+                }
+
+        self._tracks = new_tracks
+
+    def _background_identify(self, frame, face_boxes):
+        """Run InsightFace identification in background thread."""
+        if self._insight_running:
+            return
+        if time.time() - self._last_id_time < 1.5:
+            return
+        if not face_boxes:
+            return
+
+        self._insight_running = True
+        self._last_id_time = time.time()
+
+        # Copy the crop regions
+        crops = []
+        for x1, y1, x2, y2 in face_boxes:
+            crop = frame[max(0, y1 - 5):min(frame.shape[0], y2 + 5),
+                         max(0, x1 - 5):min(frame.shape[1], x2 + 5)].copy()
+            crops.append(crop)
+
+        face_ids = list(range(len(face_boxes)))
+
+        def _run():
+            try:
+                _init_insightface()
+                if _face_app is None:
+                    return
+                results = {}
+                for fi, crop in zip(face_ids, crops):
+                    try:
+                        faces = _face_app.get(crop)
+                        if faces:
+                            name, dist = _match_known_faces(faces[0])
+                            results[fi] = {"name": name, "distance": dist}
+                    except Exception:
+                        pass
+                self._id_results = results
+            finally:
+                self._insight_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def update(self, frame):
+        """Detect faces, track, identify, draw on frame. Returns annotated frame."""
+        # Detect faces
+        face_boxes = dnn_detect(frame)
+
+        # Match to tracks
+        self._match_tracks(face_boxes)
+
+        # Background identification
+        self._background_identify(frame, face_boxes)
+
+        # Apply identification results
+        with self._lock:
+            for fi, info in self._id_results.items():
+                for tid, trk in self._tracks.items():
+                    if trk["face_id"] == fi and trk["name"] is None:
+                        trk["name"] = info["name"]
+
+        # Draw faces on frame
+        for tid, trk in self._tracks.items():
+            if trk["age"] < 2:
+                continue
+
+            color = trk["color"]
+            sx, ex = trk["smooth_x"]
+            sy, ey = trk["smooth_y"]
+
+            # Draw box
+            cv2.rectangle(frame, (sx, sy), (ex, ey), color, 2)
+
+            # Label
+            name = trk["name"] or "..."
+            label = f"{name}"
+
+            # Background for text
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(frame, (sx, sy - th - 10), (sx + tw + 6, sy), color, -1)
+            cv2.putText(frame, label, (sx + 3, sy - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+
+            # Size info
+            fw = ex - sx
+            fh = ey - sy
+            info = f"{fw}x{fh}"
+            cv2.putText(frame, info, (sx, ey + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+        return frame
