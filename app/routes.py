@@ -47,6 +47,11 @@ def camera_feed():
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
         cap.set(cv2.CAP_PROP_FPS, 30)
 
+        # FPS counter state: rolling 30-frame average
+        import collections
+        _frame_times = collections.deque(maxlen=30)
+        _fps_last_time = time.monotonic()
+
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -63,6 +68,22 @@ def camera_feed():
                 detect_and_draw(frame)
             except Exception:
                 pass
+
+            # FPS counter: rolling 30-frame average
+            now = time.monotonic()
+            _frame_times.append(now - _fps_last_time)
+            _fps_last_time = now
+            if len(_frame_times) > 1:
+                avg_dt = sum(_frame_times) / len(_frame_times)
+                fps = 1.0 / avg_dt if avg_dt > 0 else 0.0
+            else:
+                fps = 0.0
+
+            fps_text = f"FPS: {fps:.1f}"
+            cv2.putText(
+                frame, fps_text, (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2,
+            )
 
             # Encode and stream
             _, jpeg = cv2.imencode(
