@@ -1,0 +1,14 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.github/
+.env
+data/
+models/*.caffemodel
+.pytest_cache/
+*.db
+.DS_Store
+Thumbs.db
