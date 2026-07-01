@@ -1,11 +1,18 @@
-import logging
+#!/usr/bin/env python3
+"""Quick launcher for the Face Recognition System."""
+import subprocess
+import sys
+import os
 
-from app import create_app
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-app = create_app()
+# Check if PySide6 is installed
+try:
+    import PySide6  # noqa: F401
+except ImportError:
+    print("Installing dependencies...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--break-system-packages",
+                           "-r", "requirements.txt"])
 
-if __name__ == "__main__":
-    logger = logging.getLogger(__name__)
-    logger.info("Starting Facial Recognition System...")
-    logger.info("Open http://localhost:5000 in your browser")
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+from main import main
+main()

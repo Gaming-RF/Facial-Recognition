@@ -1,15 +1,16 @@
+"""
+SQLite storage for persons and face encodings.
+Compatible with the existing faces.db schema.
+"""
 import sqlite3
 import json
 import time
-import config
-
-_encoding_cache = None
-_encoding_cache_time = 0.0
-ENCODING_CACHE_TTL = 5.0
+import numpy as np
+from app.config import DB_PATH, DATA_DIR, MUGSHOTS_DIR
 
 
-def get_db():
-    conn = sqlite3.connect(str(config.DB_PATH))
+def get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -17,8 +18,9 @@ def get_db():
 
 
 def init_db():
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    config.MUGSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    """Create tables if they don't exist. Safe to call repeatedly."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    MUGSHOTS_DIR.mkdir(parents=True, exist_ok=True)
     conn = get_db()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS persons (
@@ -36,32 +38,32 @@ def init_db():
             FOREIGN KEY (person_id) REFERENCES persons(id) ON DELETE CASCADE
         );
     """)
-    # Migration: add attributes column if missing (for existing DBs)
+    # Migration: add attributes column if missing
     cols = [r[1] for r in conn.execute("PRAGMA table_info(persons)").fetchall()]
     if "attributes" not in cols:
-        conn.execute("ALTER TABLE persons ADD COLUMN attributes TEXT DEFAULT '{}'" )
-        conn.commit()
+        conn.execute("ALTER TABLE persons ADD COLUMN attributes TEXT DEFAULT '{}'")
     conn.commit()
     conn.close()
 
 
-def add_person(name, encodings, mugshot_path=None):
-    global _encoding_cache
+# ── Person CRUD ─────────────────────────────────────────────────
+
+def add_person(name: str, encodings=None, mugshot_path=None):
     now = time.time()
     conn = get_db()
     try:
         cur = conn.execute(
             "INSERT INTO persons (name, created_at, mugshot_path) VALUES (?, ?, ?)",
-            (name, now, str(mugshot_path) if mugshot_path else None)
+            (name, now, str(mugshot_path) if mugshot_path else None),
         )
         person_id = cur.lastrowid
-        for enc in encodings:
-            conn.execute(
-                "INSERT INTO encodings (person_id, encoding, created_at) VALUES (?, ?, ?)",
-                (person_id, json.dumps(enc.tolist()), now)
-            )
+        if encodings:
+            for enc in encodings:
+                conn.execute(
+                    "INSERT INTO encodings (person_id, encoding, created_at) VALUES (?, ?, ?)",
+                    (person_id, json.dumps(enc.tolist()), now),
+                )
         conn.commit()
-        _encoding_cache = None
         return person_id
     except sqlite3.IntegrityError:
         return None
@@ -71,78 +73,18 @@ def add_person(name, encodings, mugshot_path=None):
 
 def get_all_persons():
     conn = get_db()
-    rows = conn.execute("SELECT * FROM persons ORDER BY created_at DESC").fetchall()
+    rows = conn.execute("SELECT * FROM persons ORDER BY name COLLATE NOCASE").fetchall()
     conn.close()
     result = []
     for r in rows:
         d = dict(r)
         d["attributes"] = json.loads(d.get("attributes") or "{}")
+        d["encoding_count"] = get_encoding_count(d["id"])
         result.append(d)
     return result
 
 
-def get_person_by_name(name):
-    conn = get_db()
-    row = conn.execute("SELECT * FROM persons WHERE name = ?", (name,)).fetchone()
-    conn.close()
-    if not row:
-        return None
-    d = dict(row)
-    d["attributes"] = json.loads(d.get("attributes") or "{}")
-    return d
-
-
-def get_all_encodings():
-    global _encoding_cache, _encoding_cache_time
-    now = time.time()
-    if _encoding_cache is not None and (now - _encoding_cache_time) < ENCODING_CACHE_TTL:
-        return _encoding_cache
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT e.encoding, p.name, p.id as person_id
-        FROM encodings e JOIN persons p ON e.person_id = p.id
-    """).fetchall()
-    conn.close()
-    result = []
-    for r in rows:
-        result.append({
-            "encoding": json.loads(r["encoding"]),
-            "name": r["name"],
-            "person_id": r["person_id"]
-        })
-    _encoding_cache = result
-    _encoding_cache_time = now
-    return result
-
-
-def add_encoding_to_person(person_id, encoding):
-    """Add a new encoding to a person. Returns the new encoding count."""
-    global _encoding_cache
-    now = time.time()
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO encodings (person_id, encoding, created_at) VALUES (?, ?, ?)",
-        (person_id, json.dumps(encoding.tolist()), now)
-    )
-    count = conn.execute(
-        "SELECT COUNT(*) FROM encodings WHERE person_id = ?", (person_id,)
-    ).fetchone()[0]
-    conn.commit()
-    conn.close()
-    _encoding_cache = None
-    return count
-
-
-def get_encoding_count(person_id):
-    conn = get_db()
-    count = conn.execute(
-        "SELECT COUNT(*) FROM encodings WHERE person_id = ?", (person_id,)
-    ).fetchone()[0]
-    conn.close()
-    return count
-
-
-def get_person_by_id(person_id):
+def get_person_by_id(person_id: int):
     conn = get_db()
     row = conn.execute("SELECT * FROM persons WHERE id = ?", (person_id,)).fetchone()
     conn.close()
@@ -150,148 +92,79 @@ def get_person_by_id(person_id):
         return None
     d = dict(row)
     d["attributes"] = json.loads(d.get("attributes") or "{}")
+    d["encoding_count"] = get_encoding_count(d["id"])
     return d
 
 
-def update_person_attributes(person_id, attributes):
-    """Merge attributes into the person's attributes JSON."""
-    conn = get_db()
-    row = conn.execute("SELECT attributes FROM persons WHERE id = ?", (person_id,)).fetchone()
-    if not row:
-        conn.close()
-        return False
-    existing = json.loads(row[0] or "{}")
-    existing.update(attributes)
-    conn.execute("UPDATE persons SET attributes = ? WHERE id = ?",
-                 (json.dumps(existing), person_id))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def delete_person(person_id):
-    global _encoding_cache
+def delete_person(person_id: int):
     conn = get_db()
     conn.execute("DELETE FROM persons WHERE id = ?", (person_id,))
     conn.commit()
     conn.close()
-    _encoding_cache = None
 
 
-def get_encodings_for_person(person_id):
-    """Return all encoding IDs and their creation times for a person."""
+def update_person_attributes(person_id: int, attributes: dict):
     conn = get_db()
-    rows = conn.execute(
-        "SELECT id, created_at FROM encodings WHERE person_id = ? ORDER BY created_at",
-        (person_id,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def delete_encoding(encoding_id):
-    global _encoding_cache
-    conn = get_db()
-    conn.execute("DELETE FROM encodings WHERE id = ?", (encoding_id,))
+    conn.execute(
+        "UPDATE persons SET attributes = ? WHERE id = ?",
+        (json.dumps(attributes), person_id),
+    )
     conn.commit()
     conn.close()
-    _encoding_cache = None
 
 
-def list_encodings():
-    """Return all encodings with person info for the manage UI."""
+# ── Encoding CRUD ───────────────────────────────────────────────
+
+def add_encoding(person_id: int, encoding: np.ndarray):
+    now = time.time()
     conn = get_db()
-    rows = conn.execute("""
-        SELECT e.id, e.person_id, p.name as person_name, e.created_at
-        FROM encodings e JOIN persons p ON e.person_id = p.id
-        ORDER BY e.created_at DESC
-    """).fetchall()
+    conn.execute(
+        "INSERT INTO encodings (person_id, encoding, created_at) VALUES (?, ?, ?)",
+        (person_id, json.dumps(encoding.tolist()), now),
+    )
+    conn.commit()
     conn.close()
-    return [dict(r) for r in rows]
 
 
-def person_count():
+def get_encoding_count(person_id: int) -> int:
     conn = get_db()
-    count = conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0]
+    count = conn.execute(
+        "SELECT COUNT(*) FROM encodings WHERE person_id = ?", (person_id,)
+    ).fetchone()[0]
     conn.close()
     return count
 
 
-def export_all_persons():
-    """Export all persons with their attributes."""
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT id, name, created_at, mugshot_path, attributes FROM persons ORDER BY id"
-    ).fetchall()
-    conn.close()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["attributes"] = json.loads(d.get("attributes") or "{}")
-        result.append(d)
-    return result
-
-
-def export_all_encodings():
-    """Export all encodings as base64 blobs with person info."""
-    import base64
-
+def get_all_encodings() -> list[dict]:
     conn = get_db()
     rows = conn.execute("""
-        SELECT e.id, e.person_id, e.encoding, e.created_at,
-               p.name as person_name
+        SELECT e.id, e.encoding, p.name, p.id AS person_id
         FROM encodings e JOIN persons p ON e.person_id = p.id
-        ORDER BY e.id
     """).fetchall()
     conn.close()
     result = []
     for r in rows:
-        encoding_list = json.loads(r["encoding"])
-        # Convert list of floats back to bytes for compact base64 export
-        import array
-        enc_array = array.array("f", encoding_list)
-        enc_blob = enc_array.tobytes()
         result.append({
-            "encoding_id": r["id"],
+            "id": r["id"],
+            "encoding": np.array(json.loads(r["encoding"]), dtype=np.float32),
+            "name": r["name"],
             "person_id": r["person_id"],
-            "person_name": r["person_name"],
-            "encoding_b64": base64.b64encode(enc_blob).decode("ascii"),
-            "created_at": r["created_at"],
         })
     return result
 
 
-def import_persons(persons_data):
-    """Import persons from a list of dicts. Deduplicates by name.
-
-    Returns (imported_count, skipped_names).
-    """
-    global _encoding_cache
-    imported = 0
-    skipped = []
+def delete_encoding(enc_id: int):
     conn = get_db()
-    try:
-        for p in persons_data:
-            name = p.get("name", "").strip()
-            if not name:
-                continue
-            # Check for duplicate by name
-            existing = conn.execute(
-                "SELECT id FROM persons WHERE name = ?", (name,)
-            ).fetchone()
-            if existing:
-                skipped.append(name)
-                continue
-            now = time.time()
-            attrs = json.dumps(p.get("attributes", {}))
-            mugshot = p.get("mugshot_path")
-            conn.execute(
-                "INSERT INTO persons (name, created_at, mugshot_path, attributes) VALUES (?, ?, ?, ?)",
-                (name, p.get("created_at", now), mugshot, attrs),
-            )
-            imported += 1
-        conn.commit()
-        _encoding_cache = None
-    finally:
-        conn.close()
-    return imported, skipped
+    conn.execute("DELETE FROM encodings WHERE id = ?", (enc_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_encodings_for_person(person_id: int) -> list[dict]:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, encoding, created_at FROM encodings WHERE person_id = ?",
+        (person_id,),
+    ).fetchall()
+    conn.close()
+    return [{"id": r["id"], "encoding": json.loads(r["encoding"]), "created_at": r["created_at"]} for r in rows]

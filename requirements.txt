@@ -1,14 +1,10 @@
-python-dotenv>=1.0
-flask>=3.0
-flask-limiter>=3.0
-insightface>=0.7
-onnxruntime>=1.16
+# Face Recognition System — Standalone Desktop App
+PySide6>=6.6
 opencv-python-headless>=4.8
 numpy>=1.24
 Pillow>=10.0
-openai>=1.0
-mediapipe>=0.10.0
+insightface>=0.7
+onnxruntime>=1.16
 
-# Dev / CI
-ruff>=0.4
-pytest>=8.0
+# Optional: hand gesture detection
+# mediapipe>=0.10.0
